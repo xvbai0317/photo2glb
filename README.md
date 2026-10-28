@@ -7,9 +7,9 @@
 
 ## 效果：Parker 三阀仪表管接头
 
-| 输入：单张照片 | 输出：程序化重建的 GLB（three.js 真实渲染） |
+| 输入：单张照片 | 输出：导出的 GLB 在 Blender 4.3 中打开 |
 |---|---|
-| <img src="docs/reference.png" width="420" /> | <img src="docs/render.png" width="420" /> |
+| <img src="docs/reference.png" width="360" /> | <img src="docs/render.png" width="560" /> |
 
 | 指标 | 值 |
 |---|---|
