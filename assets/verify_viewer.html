@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>GLB verification view</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #f2f3f5; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// ---- query params -------------------------------------------------------
+// model : path/URL of the .glb (relative to this page or the server root)
+// az    : camera azimuth in degrees, + rotates to the right (default 38)
+// el    : camera elevation above horizon in degrees (default 18)
+// dist  : camera distance in metres; 0 = auto-fit to the model (default 0)
+// fov   : vertical field of view (default 30)
+// w,h   : canvas size (default 1000x1000)
+const q = new URLSearchParams(location.search);
+const url = q.get('model') || 'model.glb';
+const az = parseFloat(q.get('az') ?? '38');
+const el = parseFloat(q.get('el') ?? '18');
+let dist = parseFloat(q.get('dist') ?? '0');
+const fov = parseFloat(q.get('fov') ?? '30');
+const W = parseInt(q.get('w') ?? '1000');
+const H = parseInt(q.get('h') ?? '1000');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.90;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf2f3f5);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+
+// Bright neutral studio IBL: grey gradient dome + three softboxes.
+// Metals only reflect the environment, so a dark env makes steel look black.
+function studioEnv() {
+  const s = new THREE.Scene();
+  const cv = document.createElement('canvas');
+  cv.width = 8; cv.height = 256;
+  const cx = cv.getContext('2d');
+  const gr = cx.createLinearGradient(0, 0, 0, 256);
+  gr.addColorStop(0.00, '#ffffff');
+  gr.addColorStop(0.40, '#eef0f3');
+  gr.addColorStop(0.52, '#d7dade');
+  gr.addColorStop(0.70, '#9ea3a9');
+  gr.addColorStop(1.00, '#5f6368');
+  cx.fillStyle = gr; cx.fillRect(0, 0, 8, 256);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  s.add(new THREE.Mesh(new THREE.SphereGeometry(12, 24, 16),
+    new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide })));
+  const soft = (w, h, pos, col, k) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(col).multiplyScalar(k) }));
+    m.position.set(pos[0], pos[1], pos[2]);
+    m.lookAt(0, 0, 0);
+    s.add(m);
+  };
+  soft(9, 7, [-4, 7, 6], 0xffffff, 1.45);
+  soft(7, 7, [6, 5, -4], 0xf2f6ff, 0.85);
+  soft(5, 9, [0, 9, -5], 0xffffff, 0.65);
+  return pmrem.fromScene(s, 0.02).texture;
+}
+scene.environment = studioEnv();
+scene.environmentIntensity = 1.0;
+
+const camera = new THREE.PerspectiveCamera(fov, W / H, 0.0005, 50);
+
+// soft key + fill + rim to match a studio product shot
+const key = new THREE.DirectionalLight(0xffffff, 1.5);
+key.position.set(-0.5, 0.9, 0.8);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xeef2ff, 0.7);
+fill.position.set(0.9, 0.4, 0.3);
+scene.add(fill);
+const rim = new THREE.DirectionalLight(0xffffff, 0.8);
+rim.position.set(0.2, 0.5, -1.0);
+scene.add(rim);
+scene.add(new THREE.AmbientLight(0xffffff, 0.15));
+
+new GLTFLoader().load(url, (gltf) => {
+  const root = gltf.scene;
+  scene.add(root);
+
+  const box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3(); box.getSize(size);
+  const ctr = new THREE.Vector3(); box.getCenter(ctr);
+  const radius = Math.max(size.length() * 0.5, 1e-4);
+
+  if (!dist || dist <= 0) {
+    // fit the bounding sphere into the vertical fov with a small margin
+    const fit = radius / Math.sin(fov * Math.PI / 360);
+    dist = Math.max(fit * 1.05, 1e-3);
+  }
+
+  const a = az * Math.PI / 180, e = el * Math.PI / 180;
+  camera.position.set(
+    ctr.x + dist * Math.cos(e) * Math.sin(a),
+    ctr.y + dist * Math.sin(e),
+    ctr.z + dist * Math.cos(e) * Math.cos(a)
+  );
+  camera.lookAt(ctr);
+  camera.near = Math.max(dist - radius * 4, 1e-5);
+  camera.far = dist + radius * 8;
+  camera.updateProjectionMatrix();
+
+  console.log('MODEL', JSON.stringify({ size: size.toArray(), min: box.min.toArray(), max: box.max.toArray() }));
+  let meshes = 0, tris = 0;
+  root.traverse(o => {
+    if (o.isMesh) {
+      meshes++;
+      const g = o.geometry;
+      tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
+    }
+  });
+  console.log('STATS', JSON.stringify({ meshes, tris, dist }));
+  renderer.render(scene, camera);
+  window.__ready = true;
+}, undefined, (err) => { console.log('LOAD_ERROR', err && err.message ? err.message : err); });
+</script>
+</body>
+</html>

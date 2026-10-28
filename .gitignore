@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+examples/preview_*.png
+shot*.png
+out/
